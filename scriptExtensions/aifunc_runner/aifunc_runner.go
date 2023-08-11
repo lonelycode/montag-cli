@@ -7,14 +7,18 @@ import (
 	"github.com/d5/tengo/v2"
 	"github.com/d5/tengo/v2/token"
 
+	"github.com/lonelycode/montag-cli/client"
 	"github.com/lonelycode/montag-cli/models"
 )
 
 type AIFuncRunner struct {
+	client *client.Client
 }
 
-func NewAIFuncRunner() *AIFuncRunner {
-	return &AIFuncRunner{}
+func NewAIFuncRunner(c *client.Client) *AIFuncRunner {
+	return &AIFuncRunner{
+		client: c,
+	}
 }
 
 func (*AIFuncRunner) TypeName() string {
@@ -89,7 +93,7 @@ func (a *AIFuncRunner) Call(args ...tengo.Object) (ret tengo.Object, err error) 
 	// this is odd
 	fName := a.cleanString(funcName)
 
-	out, err := CallAIFuncFromAPI(call, fName)
+	out, err := a.CallAIFuncFromAPI(call, fName)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +117,6 @@ func tengoMapToMap(m map[string]tengo.Object) map[string]interface{} {
 	return out
 }
 
-func CallAIFuncFromAPI(req *models.AIFuncCall, name string) (*models.AIFuncResponse, error) {
-
-	return d, nil
+func (a *AIFuncRunner) CallAIFuncFromAPI(req *models.AIFuncCall, name string) (*models.AIFuncResponse, error) {
+	return a.client.RunAIFunc(name, req)
 }
