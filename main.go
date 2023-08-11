@@ -48,20 +48,27 @@ func main() {
 			},
 			&cli.StringFlag{
 				Name:  "data",
-				Value: "./inputs.json",
+				Value: "",
 				Usage: "file to use as input data",
 			},
 			&cli.StringFlag{
 				Name:  "message",
-				Value: "the input that would go to the function as the user message",
+				Value: "",
 				Usage: "user message (simulated interaction with bot)",
 			},
 		},
 		Name:  "montag-cli",
 		Usage: "run montag scripts locally, with resources provided by a montag server",
 		Action: func(cCtx *cli.Context) error {
-			apiClient := client.NewClient(cCtx.String("server"), cCtx.String("key"))
-			var inputs map[string]interface{}
+			apiClient := client.NewClient(cCtx.String("key"), cCtx.String("server"))
+
+			inputs := map[string]interface{}{
+				"message": "",
+				"history": []string{},
+				"context": []string{},
+				"userID":  1,
+			}
+
 			if cCtx.String("data") != "" {
 				data := openFile(cCtx.String("data"))
 				err := json.Unmarshal(data, &inputs)
@@ -82,7 +89,7 @@ func main() {
 				return err
 			}
 
-			fmt.Printf("Script output:\n - Outputs: %v\n - Response: %v - Override: %v\n", so.Outputs, so.Response, so.ReturnQuery)
+			fmt.Printf("SCRIPT OUTPUT:\n - Output Vars: %v\n - Forward Output: %v\n - Return Override: %v\n\n", so.Outputs, so.Response, so.ReturnQuery)
 			return nil
 		},
 	}
@@ -206,7 +213,6 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 	}
 
 	// add the remainder
-	fmt.Println(inputs)
 	for k, v := range inputs {
 		if k == "message" || k == "history" || k == "context" {
 			continue
@@ -227,19 +233,19 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 	so := &models.ScriptOutput{}
 	response := compiled.Get("montagResponse")
 	if response != nil {
-		fmt.Println("script has response of: ", response.String())
+		//fmt.Println("script has response of: ", response.String())
 		so.Response = response.String()
 	}
 
 	outputs := compiled.Get("montagOutputs")
 	if outputs != nil {
-		fmt.Println("script has outputs of: ", outputs.Map())
+		// fmt.Println("script has outputs of: ", outputs.Map())
 		so.Outputs = outputs.Map()
 	}
 
 	returnQuery := compiled.Get("montagOverride")
 	if returnQuery != nil {
-		fmt.Println("script has reply of: ", returnQuery.String())
+		// fmt.Println("script has reply of: ", returnQuery.String())
 		so.ReturnQuery = returnQuery.String()
 	}
 

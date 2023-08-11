@@ -42,8 +42,8 @@ func (c *Client) ResourceURI(resource string) string {
 }
 
 func (c *Client) URLWithVal(resource, key, value string) string {
-	ep := strings.Replace(c.ResourceURI(resource), key, value, 1)
-	return ep
+	fixedResource := strings.Replace(resource, key, value, 1)
+	return c.ResourceURI(fixedResource)
 }
 
 func (c *Client) RunAIFunc(name string, inputs *models.AIFuncCall) (*models.AIFuncResponse, error) {

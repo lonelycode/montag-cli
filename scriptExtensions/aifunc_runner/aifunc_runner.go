@@ -62,16 +62,16 @@ func (*AIFuncRunner) CanCall() bool {
 // value and/or an error, which the VM will consider as a run-time error.
 func (a *AIFuncRunner) Call(args ...tengo.Object) (ret tengo.Object, err error) {
 	funcName := args[0].String()
-	fmt.Println("Calling function", funcName)
+	//fmt.Println("Calling function", funcName)
 	funcInput := args[1]
-	fmt.Println("With input", funcInput)
+	// fmt.Println("With input", funcInput)
 
 	input, err := funcInput.IndexGet(&tengo.String{Value: "Input"})
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Println("Got input string", input)
+	//fmt.Println("Got input string", input)
 
 	mtObj, err := funcInput.IndexGet(&tengo.String{Value: "Meta"})
 	if err != nil {
@@ -83,7 +83,7 @@ func (a *AIFuncRunner) Call(args ...tengo.Object) (ret tengo.Object, err error) 
 		return nil, fmt.Errorf("expected meta to be a map")
 	}
 
-	fmt.Println("Got meta", meta)
+	// fmt.Println("Got meta", meta)
 
 	call := &models.AIFuncCall{
 		Input: a.cleanString(input.String()),
