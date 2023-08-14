@@ -87,3 +87,9 @@ type QueryMatch struct {
 	Score    float32           `json:"score"` // Use "score" instead of "distance"
 	Metadata map[string]string `json:"metadata"`
 }
+
+type Snippet struct {
+	ID      uint   `json:"id"`
+	Slug    string `json:"slug"`
+	Content string `json:"content"`
+}

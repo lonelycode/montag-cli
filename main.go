@@ -17,6 +17,7 @@ import (
 	"github.com/lonelycode/montag-cli/scriptExtensions/readable"
 	scripthttpcaller "github.com/lonelycode/montag-cli/scriptExtensions/script_httpcaller"
 	secretGetter "github.com/lonelycode/montag-cli/scriptExtensions/secretGetter"
+	snippetStore "github.com/lonelycode/montag-cli/scriptExtensions/snippets"
 	vectorlookup "github.com/lonelycode/montag-cli/scriptExtensions/vector_lookup"
 	"github.com/urfave/cli/v2"
 	"gorm.io/driver/sqlite"
@@ -198,6 +199,11 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 	}
 
 	err = s.Add("montagKV", kvstore.NewKVStore(db, 1))
+	if err != nil {
+		return nil, err
+	}
+
+	err = s.Add("montagGetSnippet", snippetStore.NewSnippetStore(apiClient))
 	if err != nil {
 		return nil, err
 	}

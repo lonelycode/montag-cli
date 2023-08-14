@@ -14,6 +14,7 @@ import (
 const (
 	EP_RunAIFunc    = "/api/aifunctions/call/{slug}"
 	EP_VectorSearch = "/api/bots/{id}/search"
+	EP_SnippetsList = "/api//snippets"
 )
 
 type Client struct {
@@ -77,4 +78,25 @@ func (c *Client) VectorSearch(botID int, query string, numResults int) ([]*model
 	}
 
 	return res, nil
+}
+
+func (c *Client) GetSnippet(slug string) (string, error) {
+	ep := c.ResourceURI(EP_SnippetsList)
+	var res []*models.Snippet
+	ctx := context.Background()
+	err := c.BaseRequest(ep).
+		ToJSON(&res).
+		Fetch(ctx)
+
+	if err != nil {
+		return "", err
+	}
+
+	for _, s := range res {
+		if s.Slug == slug {
+			return s.Content, nil
+		}
+	}
+
+	return "", nil
 }
