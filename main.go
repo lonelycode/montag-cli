@@ -218,6 +218,15 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 		return nil, fmt.Errorf("failed to add user message: %s", err)
 	}
 
+	tHistory := &tengo.Array{}
+	tString := &tengo.String{Value: "User: DUMMY INPUT"}
+	tHistory.Value = append(tHistory.Value, tString)
+
+	err = s.Add("montagUserHistory", tHistory)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add user history: %s", err)
+	}
+
 	// add the remainder
 	for k, v := range inputs {
 		if k == "message" || k == "history" || k == "context" {
