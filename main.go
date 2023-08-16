@@ -16,6 +16,7 @@ import (
 	"github.com/lonelycode/montag-cli/scriptExtensions/kvstore"
 	"github.com/lonelycode/montag-cli/scriptExtensions/readable"
 	scripthttpcaller "github.com/lonelycode/montag-cli/scriptExtensions/script_httpcaller"
+	scriptBytesHttpCaller "github.com/lonelycode/montag-cli/scriptExtensions/script_httpcaller_bytes"
 	secretGetter "github.com/lonelycode/montag-cli/scriptExtensions/secretGetter"
 	snippetStore "github.com/lonelycode/montag-cli/scriptExtensions/snippets"
 	vectorlookup "github.com/lonelycode/montag-cli/scriptExtensions/vector_lookup"
@@ -57,6 +58,11 @@ func main() {
 				Value: "",
 				Usage: "user message (simulated interaction with bot)",
 			},
+			&cli.BoolFlag{
+				Name:  "passive",
+				Value: false,
+				Usage: "set to true to run in passive mode (no user mention)",
+			},
 		},
 		Name:  "montag-cli",
 		Usage: "run montag scripts locally, with resources provided by a montag server",
@@ -64,10 +70,11 @@ func main() {
 			apiClient := client.NewClient(cCtx.String("key"), cCtx.String("server"))
 
 			inputs := map[string]interface{}{
-				"message": "",
-				"history": []string{},
-				"context": []string{},
-				"userID":  1,
+				"message":    "",
+				"history":    []string{},
+				"context":    []string{},
+				"userID":     1,
+				"is_passive": cCtx.Bool("passive"),
 			}
 
 			if cCtx.String("data") != "" {
@@ -173,6 +180,11 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 		return nil, err
 	}
 
+	err = s.Add("montagMakeHttpRequestForBytes", scriptBytesHttpCaller.NewBytesHttpCaller())
+	if err != nil {
+		return nil, err
+	}
+
 	err = s.Add("montagGetReadableURL", readable.NewReadable())
 	if err != nil {
 		return nil, err
@@ -216,6 +228,11 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 	err = s.Add("montagUserMessage", msg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add user message: %s", err)
+	}
+
+	err = s.Add("montagIsMsgPassive", inputs["is_passive"])
+	if err != nil {
+		return nil, fmt.Errorf("failed to add montagIsMsgPassive: %s", err)
 	}
 
 	tHistory := &tengo.Array{}
