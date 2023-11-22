@@ -2,6 +2,8 @@ package vectorlookup
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/d5/tengo/v2"
@@ -64,10 +66,10 @@ func (a *VectorLookup) Call(args ...tengo.Object) (ret tengo.Object, err error) 
 		return nil, fmt.Errorf("expected 3 arguments, got %d", len(args))
 	}
 
-	botID := int(args[0].(*tengo.Int).Value)
+	namespace := a.cleanString(args[0].(*tengo.String).Value)
 	numResults := int(args[1].(*tengo.Int).Value)
 	query := a.cleanString(args[2].String())
-	out, err := a.search(botID, numResults, query)
+	out, err := a.search(namespace, numResults, query)
 
 	if err != nil {
 		return &tengo.String{Value: ""}, err
@@ -84,9 +86,19 @@ func (a *VectorLookup) cleanString(str string) string {
 	return strings.Trim(str, "\"")
 }
 
-func (a *VectorLookup) search(botID, numResults int, query string) (tengo.Object, error) {
+func (a *VectorLookup) search(namespace string, numResults int, query string) (tengo.Object, error) {
 	// Search the vector DB for the query
-	results, err := a.client.VectorSearch(botID, query, numResults)
+	botIDStr := os.Getenv("MONTAG_BOT_ID")
+	if botIDStr == "" {
+		return nil, fmt.Errorf("MONTAG_BOT_ID not set, required for vector lookup API")
+	}
+
+	botID, err := strconv.Atoi(botIDStr)
+	if err != nil {
+		return nil, err
+	}
+
+	results, err := a.client.VectorSearchNS(botID, namespace, query, numResults)
 	if err != nil {
 		return nil, err
 	}

@@ -1,0 +1,474 @@
+fmt := import("fmt")
+json := import("json")
+text := import("text")
+
+CUTOFF := 0.005
+CLASSIFIER := 5
+
+dedupe := func(strArray) {
+    n := []
+    for s in strArray {
+        exists := false
+        for x in n {
+            if s == x {
+                exists = true
+            }
+        }
+
+        if !exists {
+            n = append(n, s)
+        }
+    }
+
+    return n
+}
+
+getRoute := func(routeInput) {
+  route := montagRun("MOELayer1", routeInput)
+  fmt.println(route)
+  routeMap := json.decode(route)
+  return routeMap
+}
+
+contextualiseResources := func() {
+  webContent := []
+  for res in montagResources {
+    web := res.clean
+    if web == "" {
+      if res.raw != "" {
+        web = res.raw
+      }
+    }
+    
+    if web != "" {
+      entry := fmt.sprintf("URL: %s\nPAGE CONTENT:\n%s", res.uri, web)
+      webContent = append(webContent, entry)
+    }
+  }
+  
+  return text.join(webContent, "\n\n")
+}
+
+getWebContent := func() {
+  webResources := contextualiseResources()
+  
+  newPrompt := ""
+  if webResources != "" {
+    newPrompt = fmt.sprintf("The following web resources are available to help with your response:\n%s", webResources)
+  }
+  
+  return newPrompt
+}
+
+getHistory := func() {
+  newPrompt := ""
+  if len(montagUserHistory) > 0 {
+    historyContent := text.join(montagUserHistory, "\n")
+    newPrompt = fmt.sprintf("This is the conversation history so far:\n%s", historyContent)
+  }
+  
+  return newPrompt
+}
+
+callExpert := func(expertName, prompt) {
+    funcInput := {
+      Input: prompt,
+      Meta: {}
+    }
+    resp := montagRun(expertName, funcInput)
+
+    return resp
+}
+
+getContextString := func(prompt, count, database) {
+  docsRef := montagVectorSearch(database, count, prompt)
+
+  docsContent := []
+  for ref in docsRef {
+    docsContent = append(docsContent, ref.text)
+  }
+
+  docsTitles := []
+  for ref in docsRef {
+    docsTitles = append(docsTitles, ref.title)
+  }
+
+  context := text.join(docsContent, "\n")
+
+  retObj := {
+    "context": context,
+    "refs": docsTitles
+  }
+
+  return retObj
+}
+
+getDocsContextString := func(prompt, count) {
+  return getContextString(prompt, count, "tyk-docs-continuous")
+}
+
+getStackOverflowContextString := func(prompt) {
+  ctx := getContextString(prompt, 3, "stack-overflow")
+  return ctx.context
+}
+
+getRFPContextString := func(prompt) {
+  ctx := getContextString(prompt, 5, "tyk-rfp")
+  return ctx.context
+}
+
+classify := func(prompt) {
+  res := montagClassify(CLASSIFIER, prompt)
+  //montagSendMessage(fmt.sprintf("Classified as %s, probability is: %v", res.class, res.probabilities[res.class]))
+  return res
+}
+
+finalizePrompt := func(context, withPrompt) {
+  webContent := getWebContent()
+  history := getHistory()
+  withContext := fmt.sprintf("Use the following context to help with your response:\n%s\n", context)
+  
+  build := fmt.sprintf("%s", withContext)
+  
+  if webContent != "" {
+    build = fmt.sprintf("%s\n%s", build, webContent)
+  }
+ 
+  if history != "" {
+    build = fmt.sprintf("%s\n%s", build, history)
+  }
+ 
+  finalPrompt := fmt.sprintf("%s\n%s", build, withPrompt)
+
+  return finalPrompt
+}
+
+hasSecureContent := func(msg) {
+  secure_urls := [
+    "tyktech.atlassian.net",
+    "tyksupport.zendesk.com",
+    "TykTechnologies/tyk-analytics",
+    "TykTechnologies/tyk-sink",
+    "TykTechnologies/tyk-analytics-ui",
+    "TykTechnologies/portal",
+    "TykTechnologies/ara",
+    "TykTechnologies/ara-helm-chart",
+    "TykTechnologies/tyk-ci",
+    "TykTechnologies/tf-databses",
+    "TykTechnologies/terramod",
+    "TykTechnologies/tf-ara",
+    "TykTechnologies/tyk-cloud-release-bundles",
+    "TykTechnologies/tf-kubernetes-storage",
+    "TykTechnologies/portal-cli",
+    "TykTechnologies/tyk-analytics-oas",
+    "TykTechnologies/tyk-ara-billing-ui",
+    "TykTechnologies/pharos",
+    "TykTechnologies/hub",
+    "TykTechnologies/tyk-license-server-2"
+  ]
+  
+  lowered := text.to_lower(msg)
+  for url in secure_urls {
+    if text.contains(lowered, url) {
+      return true
+    }
+  }
+  
+  return false
+   
+}
+
+prepRFPExpert := func(prompt) {
+  docsContextObj := getDocsContextString(prompt, 3)
+  docsContext := docsContextObj["context"]
+  rfpContext := getRFPContextString(prompt)
+  
+  context := fmt.sprintf("Previous RFP Answers that are similar:\n%s\nRelevant Documentation context: %s", rfpContext, docsContext)
+  withPrompt := fmt.sprintf("Answer the following question based on the context provided: %s", prompt)
+  
+  finalPrompt := finalizePrompt(context, withPrompt)
+  
+  return callExpert("RFPExpert", finalPrompt)
+}
+
+prepGeneralAssistant := func(prompt) {
+  docsContextObj := getDocsContextString(prompt, 3)
+  context := docsContextObj["context"]
+  
+  withPrompt := fmt.sprintf("Answer the following, be professional and friendly in your response: %s", prompt)
+  finalPrompt := finalizePrompt(context, withPrompt)
+  
+  return callExpert("GeneralAssistant", finalPrompt)
+}
+
+
+countTokens := func(context, prompt) {
+  txt := finalizePrompt(context, prompt)
+  tokens := len(txt) / 3
+  return tokens
+}
+
+factCheck := func(lastPrompt, lastAnswer, expert) {
+  // Chain it
+  montagSendMessage("Hang on, just going to fact-check my answer...")
+  newPrompt := "Review the following question and answer, your task is to validate all the facts in the answer, and then return an updated version of the intiial answer that is fact checked."
+  chainedPrompt := fmt.sprintf("%s\n\nQuestion: %s\n\n First Answer: %s\n\n Fact check the first answer and output an updated version", newPrompt, lastPrompt, lastAnswer)
+  secondResponse := callExpert(expert, chainedPrompt)
+
+  return secondResponse
+}
+
+prepCopywriter := func(prompt, internal) {
+  docsContextObj := getDocsContextString(prompt, 3)
+  context := docsContextObj["context"]
+  
+  withPrompt := fmt.sprintf("Help with the following: %s", prompt)
+  finalPrompt := finalizePrompt(context, withPrompt)
+
+  expert := "Copywriter"
+  
+  
+  if internal {
+    expert = "InternalCopywriter"
+  }
+
+  tokenCount := countTokens("", finalPrompt)
+  montagSendMessage(fmt.sprintf("context is %d long", tokenCount))
+  if tokenCount > 8000 {
+    expert = "CopywriterExternalLongContext"
+  }
+
+  return callExpert(expert, finalPrompt)
+}
+
+
+prepSolutionsArchitect := func(prompt, internal) {
+  docsContextObj := getDocsContextString(prompt, 4)
+  docsContext := docsContextObj["context"]
+  links := docsContextObj["refs"]
+  soContext := getStackOverflowContextString(prompt)
+
+  context := fmt.sprintf("%s\n%s", docsContext, soContext)
+  withPrompt := fmt.sprintf("Help with the following, be technical and precise in your response: %s", prompt)
+  
+  finalPrompt := finalizePrompt(context, withPrompt)
+
+  expert := "SolutionsArchitect"
+  tokenCount := countTokens("", finalPrompt)
+  if tokenCount > 8000 {
+    expert = "SolutionsArchitectExternalLongContext"
+  }
+  
+  if internal {
+    expert = "InternalSolutionsArchitect"
+  }
+
+  botResponse := callExpert(expert, finalPrompt)
+  botResponse = factCheck(finalPrompt, botResponse, expert)
+
+  links = dedupe(links)
+
+  if len(links) > 0 {
+    linkText := "References: \n"
+    for l in links {
+      linkText = fmt.sprintf("%s\n- %s", linkText, l)
+    }
+    botResponse = fmt.sprintf("%s\n%s", botResponse, linkText)
+  }
+
+  return botResponse
+}
+
+prepAnalyst := func(prompt, internal) {
+  docsContextObj := getDocsContextString(prompt, 5)
+  docsContext := docsContextObj["context"]
+  links := docsContextObj["refs"]
+
+  context := fmt.sprintf("%s")
+
+  extraContextDB := ""
+  sourceIntro := ""
+  c := classify(prompt)
+  if c.class == "gravitee" && c.probabilities[c.class] < CUTOFF {
+    extraContextDB = "gravitee-docs-continuous"
+    sourceIntro = "Relevant Gravitee Documentation context:"
+  } else if c.class == "kong" && c.probabilities[c.class] < CUTOFF {
+    extraContextDB = "kong-docs-continuous"
+    sourceIntro = "Relevant Kong Documentation context:"
+  } else if c.class == "apigee" && c.probabilities[c.class] < CUTOFF {
+    extraContextDB = "apigee-edge-docs-continuous"
+    sourceIntro = "Relevant Apigee Documentation context:"
+  }
+
+  if extraContextDB != "" {
+    montagSendMessage(fmt.sprintf("The %s docs seem relevant here, adding additional references", c.class))
+    extraCtx := getContextString(prompt, 10, extraContextDB)
+    extraContext := extraCtx.context
+
+    exRefs := extraCtx["refs"]
+    
+    for l in exRefs {
+      links = append(links, l)
+    }
+    context = fmt.sprintf("%s\n%s\n%s", context, sourceIntro, extraContext)
+  }
+  
+  withPrompt := fmt.sprintf("Help with the following, be technical and precise in your response: %s", prompt)
+  
+  finalPrompt := finalizePrompt(context, withPrompt)
+
+  expert := "ResearchAnalyst"
+  botResponse := callExpert(expert, finalPrompt)
+
+  // Chain it
+  secondResponse := factCheck(finalPrompt, botResponse, expert)
+
+  links = dedupe(links)
+
+  if len(links) > 0 {
+    linkText := "References: \n"
+    for l in links {
+      linkText = fmt.sprintf("%s\n- %s", linkText, l)
+    }
+    secondResponse = fmt.sprintf("%s\n%s", botResponse, linkText)
+  }
+
+  return secondResponse
+}
+
+
+
+prepProgrammer := func(prompt) {
+  expert := "ProgrammerExpert"
+  expertName := "External AI Coder"
+  tokenCount := countTokens("", prompt)
+  montagSendMessage(fmt.sprintf("context is %d long", tokenCount))
+  if tokenCount > 16000 {
+    expert = "ProgrammerExpertExternalLongContext"
+    expertName = "The External AI Coder with long context"
+  }
+  
+  if hasSecureContent(prompt) {
+    if tokenCount > 2048 {
+      return "Sorry, this internal content is too long for our LLM to handle"
+    }
+
+    expert = "ProgrammerExpertInternal"
+    expertName = "Internal AI Coder"
+  }
+
+  
+
+  
+  montagSendMessage(fmt.sprintf("asking %s for this code-related task", expertName))
+  withPrompt := fmt.sprintf("Help with the following coding task, reply in Slack markdown and make sure to justify your reasoning: %s", prompt)
+  finalPrompt := finalizePrompt("", withPrompt)
+  
+  return callExpert(expert, finalPrompt)
+}
+
+
+forwardMessage := func(route, originalPrompt) {
+  fmt.println("GOT ROUTE")
+  fmt.println(route)
+  fmt.println("=========")
+  resp := ""
+  
+  for task in route.tasks { 
+    if task.expert == "The General Assistant" {
+        montagSendMessage("This is a job for our General Assistant...")
+        montagAddToHistory("assistant", fmt.sprintf("@General Assistant, %s", originalPrompt))
+        resp = prepGeneralAssistant(originalPrompt)
+        montagAddToHistory("assistant", fmt.sprintf("General Assistant: %s", resp))
+        break
+
+    } else if task.expert == "The Solutions Architect" {
+        montagSendMessage(fmt.sprintf("Asking the Solution Architect: %s", task.prompt))
+        montagAddToHistory("assistant", fmt.sprintf("@Solututions Architect, %s", task.prompt))
+        internal := false
+        if hasSecureContent(originalPrompt) {
+          internal := true
+        }
+        resp = prepSolutionsArchitect(task.prompt, internal)
+        montagAddToHistory("assistant", fmt.sprintf("Solututions Assistant: %s", resp))
+        break
+
+    } else if task.expert == "The Research Analyst" {
+        montagSendMessage(fmt.sprintf("Asking the Research Analyst: %s", task.prompt))
+        montagAddToHistory("assistant", fmt.sprintf("@Research Analyst, %s", task.prompt))
+        internal := false
+      
+        resp = prepAnalyst(task.prompt, internal)
+        montagAddToHistory("assistant", fmt.sprintf("Research Analyst: %s", resp))
+        break
+
+    } else if task.expert == "The Copywriter" {
+        montagSendMessage(fmt.sprintf("That sounds like a job for our Copywriter, asking: %s", task.prompt))
+        internal := false
+        if hasSecureContent(originalPrompt) {
+          montagSendMessage("The request contains secure data, going to need to ask the intern instead of the agency...")
+          internal = true
+        }
+        
+        montagAddToHistory("assistant", fmt.sprintf("@Copywriter, %s", task.prompt))
+        resp = prepCopywriter(task.prompt, internal)
+        montagAddToHistory("assistant", fmt.sprintf("Copywriter: %s", resp))
+        break
+
+    } else if task.expert == "The Sales Associate" {
+        montagSendMessage(fmt.sprintf("Let me ask our Sales Associate: %s", task.prompt))
+        montagAddToHistory("assistant", fmt.sprintf("@Sales Associate, %s", task.prompt))
+        resp = prepRFPExpert(task.prompt)
+        montagAddToHistory("assistant", fmt.sprintf("Sales Associate: %s", resp))
+        break
+
+    } else if task.expert == "The Programmer" {
+        montagSendMessage(fmt.sprintf("Asking the programming AI: %s", task.prompt))
+        montagAddToHistory("assistant", fmt.sprintf("@Programmer, %s", task.prompt))
+        
+        resp = prepProgrammer(task.prompt)
+        montagAddToHistory("assistant", fmt.sprintf("Programmer: %s", resp))
+        break
+
+    } else {
+        montagSendMessage("I'm not sure who could handle this one, so it's going to our General Assistant")
+        montagAddToHistory("assistant", fmt.sprintf("@General Assistant, %s", originalPrompt))
+        resp = prepGeneralAssistant(originalPrompt)
+        montagAddToHistory("assistant", fmt.sprintf("General Assistant: %s", resp))
+        break
+
+    }
+  }
+  
+  return resp
+}
+
+trimUserMessage := func(msg) {
+  trimmed := text.split(msg, ":\n")
+  coreMessage := trimmed[0]
+
+  context := ""
+  if len(trimmed) > 1 {
+    context = text.join(trimmed[1:], "\n")
+  }
+
+  return {
+    "core": coreMessage,
+    "context": context
+  }
+}
+
+montagOverride := ""
+if !montagIsMsgPassive {
+  montagAddToHistory("user", montagUserMessage)
+
+  splitInput := trimUserMessage(montagUserMessage)
+
+  routeInput := {
+   "Input": splitInput.core,
+    "Meta": {}
+  }
+  
+  routeMap := getRoute(routeInput)
+  montagOverride = forwardMessage(routeMap, montagUserMessage)
+}

@@ -6,6 +6,7 @@ require (
 	github.com/carlmjohnson/requests v0.23.4
 	github.com/d5/tengo/v2 v2.16.1
 	github.com/go-shiori/go-readability v0.0.0-20230421032831-c66949dfc0ad
+	github.com/n3integration/classifier v0.5.0
 	github.com/urfave/cli/v2 v2.25.7
 	gorm.io/driver/sqlite v1.5.2
 	gorm.io/gorm v1.25.3

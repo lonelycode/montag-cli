@@ -70,14 +70,21 @@ func (a *KVStoreSetter) setValue(key, value string) error {
 	return nil
 }
 
-func (a *KVStoreSetter) getValue(key string) (*tengo.String, error) {
+func (a *KVStoreSetter) getValue(key string) (*tengo.Map, error) {
 	kv, err := models.GetScriptKVStore(a.db, a.scriptID, key)
 	if err != nil {
 		log.Println(err)
 		return nil, err
 	}
 
-	return &tengo.String{Value: kv.Value}, nil
+	ret := &tengo.Map{
+		Value: map[string]tengo.Object{
+			"result": &tengo.String{Value: kv.Value},
+			"error":  &tengo.String{Value: ""},
+		},
+	}
+
+	return ret, nil
 
 }
 

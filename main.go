@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -10,8 +13,10 @@ import (
 	"github.com/d5/tengo/v2"
 	"github.com/d5/tengo/v2/stdlib"
 	"github.com/lonelycode/montag-cli/client"
+	"github.com/lonelycode/montag-cli/interfaces"
 	"github.com/lonelycode/montag-cli/models"
 	aifuncRunner "github.com/lonelycode/montag-cli/scriptExtensions/aifunc_runner"
+	"github.com/lonelycode/montag-cli/scriptExtensions/contextInjector"
 	"github.com/lonelycode/montag-cli/scriptExtensions/dummyFunc"
 	"github.com/lonelycode/montag-cli/scriptExtensions/kvstore"
 	"github.com/lonelycode/montag-cli/scriptExtensions/readable"
@@ -20,6 +25,7 @@ import (
 	secretGetter "github.com/lonelycode/montag-cli/scriptExtensions/secretGetter"
 	snippetStore "github.com/lonelycode/montag-cli/scriptExtensions/snippets"
 	vectorlookup "github.com/lonelycode/montag-cli/scriptExtensions/vector_lookup"
+	"github.com/n3integration/classifier/naive"
 	"github.com/urfave/cli/v2"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -27,6 +33,113 @@ import (
 
 func main() {
 	app := &cli.App{
+		Commands: []*cli.Command{
+			{
+				Name:  "run",
+				Usage: "run montag scripts locally, with resources provided by a montag server",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "data",
+						Value: "",
+						Usage: "file to use as input data",
+					},
+					&cli.StringFlag{
+						Name:  "message",
+						Value: "",
+						Usage: "user message (simulated interaction with bot)",
+					},
+					&cli.BoolFlag{
+						Name:  "passive",
+						Value: false,
+						Usage: "set to true to run in passive mode (no user mention)",
+					},
+				},
+				Action: func(cCtx *cli.Context) error {
+					apiClient := client.NewClient(cCtx.String("key"), cCtx.String("server"))
+
+					inputs := map[string]interface{}{
+						"message":    "",
+						"history":    []string{},
+						"context":    []string{},
+						"userID":     1,
+						"is_passive": cCtx.Bool("passive"),
+					}
+
+					if cCtx.String("data") != "" {
+						data := openFile(cCtx.String("data"))
+						err := json.Unmarshal(data, &inputs)
+						if err != nil {
+							return fmt.Errorf("failed to parse input data: %s", err)
+						}
+					}
+
+					if cCtx.String("message") != "" {
+						fmt.Println("setting message in inputs, overrides any message key in input data")
+						inputs["message"] = cCtx.String("message")
+					}
+
+					db := getDB()
+
+					so, err := runsScript(cCtx.Args().Get(0), inputs, apiClient, db)
+					if err != nil {
+						return err
+					}
+
+					fmt.Printf("SCRIPT OUTPUT:\n - Output Vars: %v\n - Forward Output: %v\n - Return Override: %v\n\n", so.Outputs, so.Response, so.ReturnQuery)
+					return nil
+				},
+			},
+			{
+				Name:  "classify",
+				Usage: "run a query against a dataset for a classifier pre-upload",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "file",
+						Value:    "",
+						Usage:    "the csv file to ingest (no header row)",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "prompt",
+						Value:    "",
+						Usage:    "the prompt to classify",
+						Required: true,
+					},
+				},
+				Action: func(cCtx *cli.Context) error {
+					fileBytes := openFile(cCtx.String("file"))
+					csvReader := csv.NewReader(bytes.NewReader(fileBytes))
+					classifier := naive.New()
+					i := 0
+					for {
+						rec, err := csvReader.Read()
+						if err == io.EOF {
+							break
+						}
+						if err != nil {
+							log.Fatal(err)
+							break
+						}
+
+						if len(rec) != 2 {
+							log.Fatal("CSV file must have two columns")
+							break
+						}
+
+						classifier.TrainString(rec[0], rec[1])
+						i++
+					}
+
+					fmt.Println("Training complete, trained on", i, "records")
+
+					probs, best := classifier.Probabilities(cCtx.String("prompt"))
+
+					fmt.Printf("Classification: %s\n", best)
+					fmt.Printf("Probabilities: %v\n", probs)
+					return nil
+				},
+			},
+		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "server",
@@ -48,56 +161,10 @@ func main() {
 				Usage:   "database to use for value storage",
 				EnvVars: []string{"MONTAG_DB"},
 			},
-			&cli.StringFlag{
-				Name:  "data",
-				Value: "",
-				Usage: "file to use as input data",
-			},
-			&cli.StringFlag{
-				Name:  "message",
-				Value: "",
-				Usage: "user message (simulated interaction with bot)",
-			},
-			&cli.BoolFlag{
-				Name:  "passive",
-				Value: false,
-				Usage: "set to true to run in passive mode (no user mention)",
-			},
 		},
 		Name:  "montag-cli",
 		Usage: "run montag scripts locally, with resources provided by a montag server",
 		Action: func(cCtx *cli.Context) error {
-			apiClient := client.NewClient(cCtx.String("key"), cCtx.String("server"))
-
-			inputs := map[string]interface{}{
-				"message":    "",
-				"history":    []string{},
-				"context":    []string{},
-				"userID":     1,
-				"is_passive": cCtx.Bool("passive"),
-			}
-
-			if cCtx.String("data") != "" {
-				data := openFile(cCtx.String("data"))
-				err := json.Unmarshal(data, &inputs)
-				if err != nil {
-					return fmt.Errorf("failed to parse input data: %s", err)
-				}
-			}
-
-			if cCtx.String("message") != "" {
-				fmt.Println("setting message in inputs, overrides any message key in input data")
-				inputs["message"] = cCtx.String("message")
-			}
-
-			db := getDB()
-
-			so, err := runsScript(cCtx.Args().Get(0), inputs, apiClient, db)
-			if err != nil {
-				return err
-			}
-
-			fmt.Printf("SCRIPT OUTPUT:\n - Output Vars: %v\n - Forward Output: %v\n - Return Override: %v\n\n", so.Outputs, so.Response, so.ReturnQuery)
 			return nil
 		},
 	}
@@ -115,6 +182,8 @@ func getDB() *gorm.DB {
 	}
 
 	d = GetSqlite(filepath.Dir(binaryPath))
+
+	d.AutoMigrate(&models.ScriptKVStore{})
 
 	return d
 }
@@ -156,6 +225,8 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 		return nil, fmt.Errorf("a tengo script filename is required")
 	}
 
+	prompt := interfaces.NewPrompt("montag-cli", "montag-cli", nil, nil, nil, "montag-cli", "montag-cli")
+
 	script := openFile(scriptName)
 
 	s := tengo.NewScript(script)
@@ -180,6 +251,18 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 		return nil, err
 	}
 
+	err = s.Add("montagHistoryLength", 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add user history: %s", err)
+	}
+
+	mRunnerStub := aifuncRunner.NewAIFuncRunner(apiClient)
+	mRunnerStub.Managed = true
+	err = s.Add("montagManagedRun", mRunnerStub)
+	if err != nil {
+		return nil, err
+	}
+
 	err = s.Add("montagMakeHttpRequestForBytes", scriptBytesHttpCaller.NewBytesHttpCaller())
 	if err != nil {
 		return nil, err
@@ -200,7 +283,12 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 		return nil, err
 	}
 
-	err = s.Add("montagAddToContext", dummyFunc.NewDummyFunc("montagAddToContext", &tengo.Int{Value: 1}))
+	// err = s.Add("montagAddToContext", dummyFunc.NewDummyFunc("montagAddToContext", &tengo.Int{Value: 1}))
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	err = s.Add("montagAddToContext", contextInjector.NewContextInjector(prompt))
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +330,12 @@ func runsScript(scriptName string, inputs map[string]interface{}, apiClient *cli
 	err = s.Add("montagUserHistory", tHistory)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add user history: %s", err)
+	}
+
+	tResources := &tengo.Array{}
+	err = s.Add("montagResources", tResources)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add resources: %s", err)
 	}
 
 	// add the remainder

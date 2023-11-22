@@ -12,7 +12,8 @@ import (
 )
 
 type AIFuncRunner struct {
-	client *client.Client
+	client  *client.Client
+	Managed bool
 }
 
 func NewAIFuncRunner(c *client.Client) *AIFuncRunner {
@@ -96,6 +97,17 @@ func (a *AIFuncRunner) Call(args ...tengo.Object) (ret tengo.Object, err error) 
 	out, err := a.CallAIFuncFromAPI(call, fName)
 	if err != nil {
 		return nil, err
+	}
+
+	if a.Managed {
+		ret = &tengo.Map{
+			Value: map[string]tengo.Object{
+				"result": &tengo.String{Value: out.Response},
+				"error":  &tengo.String{Value: ""},
+			},
+		}
+
+		return ret, nil
 	}
 
 	return &tengo.String{Value: out.Response}, nil
